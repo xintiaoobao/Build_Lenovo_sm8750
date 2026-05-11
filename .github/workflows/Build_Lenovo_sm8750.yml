@@ -71,8 +71,13 @@ on:
         default: true
         type: boolean
 
-      
-       
+      enable_lse:
+        description: "启用LSE风驰调度模块(.ko)"
+        required: false
+        default: false
+        type: boolean
+
+
 jobs:
   build:
     name: Build_${{ github.event.inputs.kernel_version }}
@@ -89,6 +94,7 @@ jobs:
       ENABLE_KPM: ${{ github.event.inputs.enable_kpm }}
       ENABLE_SUSFS: ${{ github.event.inputs.enable_susfs }}
       ENABLE_SIGNED: ${{ github.event.inputs.enable_signed }}
+      ENABLE_LSE: ${{ github.event.inputs.enable_lse }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -407,6 +413,29 @@ jobs:
           fi
           echo "✓ ADIOS I/O 调度器支持配置完成"
           
+      - name: 🔧 Add LSE Scheduling Extension (添加LSE风驰调度模块)
+        if: ${{ env.ENABLE_LSE == 'true' }}
+        run: |
+          cd kernel_workspace/common
+          echo "正在集成 LSE (Lunar Scheduling Extension) 风驰调度模块..."
+          git clone --depth=1 https://github.com/LunarKernel-Dev/lunarkernel_sched_extention.git
+          STAGING_DIR="drivers/staging"
+          LSE_DIR="$STAGING_DIR/lunarkernel_sched_extention"
+          mkdir -p "$LSE_DIR"
+          cp lunarkernel_sched_extention/*.c "$LSE_DIR/"
+          cp lunarkernel_sched_extention/*.h "$LSE_DIR/"
+          cp lunarkernel_sched_extention/Kconfig "$LSE_DIR/"
+          cp lunarkernel_sched_extention/Makefile "$LSE_DIR/"
+          if ! grep -q "lunarkernel_sched_extention" "$STAGING_DIR/Makefile"; then
+            printf '\nobj-$(CONFIG_LUNAR_SCHED_EXT) += lunarkernel_sched_extention/\n' >> "$STAGING_DIR/Makefile"
+          fi
+          if ! grep -q "lunarkernel_sched_extention" "$STAGING_DIR/Kconfig"; then
+            sed -i '/endif/i\source "drivers/staging/lunarkernel_sched_extention/Kconfig"' "$STAGING_DIR/Kconfig"
+          fi
+          echo "CONFIG_LUNAR_SCHED_EXT=m" >> arch/arm64/configs/gki_defconfig
+          rm -rf lunarkernel_sched_extention
+          echo "✓ LSE 风驰调度模块集成完成"
+
       - name: ⚙️ apply lz4 lz4 1.10.0 & zstd 1.5.7 Patch (应用lz4 1.10.0 & zstd 1.5.7补丁)
         run: |
           echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
@@ -692,6 +721,36 @@ jobs:
 
             core.info(`旧缓存清理完成，共删除 ${deleted} 个缓存`);
 
+      - name: 🔧 Build LSE Module (编译LSE风驰调度模块)
+        if: ${{ env.ENABLE_LSE == 'true' }}
+        run: |
+          WORKDIR="$(pwd)"
+          export PATH="/usr/lib/ccache:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/clang18/bin:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          cd kernel_workspace/common
+          SO_DIR=$(pwd)
+          export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
+          export FAKESTAT="${{ env.FAKESTAT }}"
+          export FAKETIME="${{ env.FAKETIME }}"
+          export KBUILD_BUILD_TIMESTAMP="${KERNEL_TIME}"
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${{ github.workspace }}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          echo "正在编译 LSE 风驰调度模块..."
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules
+          LSE_KO="out/drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko"
+          if [ -f "$LSE_KO" ]; then
+            echo "✓ LSE 模块编译成功: $LSE_KO"
+            ls -lh "$LSE_KO"
+          else
+            echo "::error::LSE 模块编译失败，未找到 .ko 文件"
+            find out/ -name "*.ko" 2>/dev/null || true
+            exit 1
+          fi
+
       - name: 📦 Apply KPM and patch the kernel (应用KPM并修补内核)
         if: ${{ env.ENABLE_KPM == 'true' }}
         run: |
@@ -737,6 +796,13 @@ jobs:
         with:
          name: Boot_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ env.KSU_TYPE }}_AOSP_Signed
          path: kernel_workspace/boot_avb_tool/AOSP-Testkey-BootSigner-main/boot.img
+
+      - name: 📤 Upload LSE Module (上传LSE风驰模块)
+        if: ${{ env.ENABLE_LSE == 'true' }}
+        uses: actions/upload-artifact@v5
+        with:
+         name: LSE_Module_${{ env.KERNEL_VERSION }}_${{ env.KSU_TYPE }}
+         path: kernel_workspace/common/out/drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko
 
   upload_rekernel:
     name: Upload Re-Kernel Module
