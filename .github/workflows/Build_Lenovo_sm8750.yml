@@ -435,10 +435,12 @@ jobs:
           echo "修复 lse_task_struct_ext.c 头文件顺序 (cputime.h 必须在 sched.h 之前)..."
           sed -i '/#include <\.\.\/kernel\/sched\/sched\.h>/i #include <linux/sched/cputime.h>' "$LSE_DIR/lse_task_struct_ext.c"
           echo "CONFIG_LUNAR_SCHED_EXT=m" >> arch/arm64/configs/gki_defconfig
-          echo "禁用 GKI 符号裁剪，允许 LSE 模块访问 proc_dobool 等内核符号..."
+          echo "禁用 GKI 符号保护，允许 LSE 模块访问 proc_dobool 等内核符号..."
           sed -i '/CONFIG_TRIM_UNUSED_KSYMS/d' arch/arm64/configs/gki_defconfig
           echo "# CONFIG_TRIM_UNUSED_KSYMS is not set" >> arch/arm64/configs/gki_defconfig
           echo "CONFIG_MODULE_FORCE_LOAD=y" >> arch/arm64/configs/gki_defconfig
+          sed -i '/CONFIG_MODULE_SIG_PROTECT/d' arch/arm64/configs/gki_defconfig
+          echo "# CONFIG_MODULE_SIG_PROTECT is not set" >> arch/arm64/configs/gki_defconfig
           rm -rf lunarkernel_sched_extention
           echo "✓ LSE 风驰调度模块集成完成"
 
